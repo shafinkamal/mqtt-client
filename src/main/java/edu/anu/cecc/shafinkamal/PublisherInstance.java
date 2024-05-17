@@ -53,9 +53,7 @@ public class PublisherInstance implements Runnable {
                 }
 
                 public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    System.out.println(clientId + " topic: " + topic);
-                    System.out.println(clientId + " qos: " + message.getQos());
-                    System.out.println(clientId + " message content: " + new String(message.getPayload()));
+                    System.out.println("MESSAGE ARRIVED!");
 
                     if (topic.equals("request/qos")) {
                         requestedQoS = Integer.parseInt(new String(message.getPayload()));
@@ -82,7 +80,11 @@ public class PublisherInstance implements Runnable {
             client.subscribe("request/instancecount", subQos);
 
             while (true) {
+                //System.out.println("while (true)");
+                //System.out.println("instanceID: " + instanceId);
+                //System.out.println("requestedInstanceCount: " + requestedInstanceCount);
                 if (instanceId <= requestedInstanceCount) {
+                    System.out.println("if (instanceId <= requestedInstanceCount)");
                     publishMessages();
                 } else {
                     // Stay quiet if this instance is not supposed to be active
@@ -100,11 +102,14 @@ public class PublisherInstance implements Runnable {
         long startTime = System.currentTimeMillis();
         while (System.currentTimeMillis() - startTime < 60000) { // Publish for 60 seconds
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
+            System.out.println(topic);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
             client.publish(topic, message);
+            System.out.println(counter);
             counter++;
             Thread.sleep(requestedDelay);
+            //System.out.println("did the publisher wake up?");
         }
     }
 

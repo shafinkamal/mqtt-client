@@ -16,6 +16,12 @@ public class Analyser implements MqttCallback {
     private String broker;
     private String clientId;
     private MqttClient client;
+    private int messageCount = 0;
+    private int outOfOrderCount = 0;
+    private long lastReceivedTime = 0;
+    private long totalGap = 0;
+    private int validGaps = 0;
+    private int lastCounterValue = -1;
 
     public Analyser(String broker, String clientId) {
         this.broker = broker;
@@ -24,7 +30,6 @@ public class Analyser implements MqttCallback {
             client = new MqttClient(broker, clientId, new MemoryPersistence());
             client.setCallback(this);
             client.connect();
-            client.subscribe("counter/#", 1);
         } catch (MqttException e) {
             e.printStackTrace();
         }
@@ -58,45 +63,130 @@ public class Analyser implements MqttCallback {
      */
     public void messageArrived(String topic, MqttMessage message) {
         String payload = new String(message.getPayload());
-        System.out.println(payload);
-    }
+        System.out.println("Received message: " + payload + "on topic: " + topic);
 
-    public void sendRequest(String qos, String delay, String instanceCount) {
-        try {
-            MqttMessage qosToMessage = new MqttMessage(qos.getBytes());
-            MqttMessage delayToMessage = new MqttMessage(qos.getBytes());
-            MqttMessage instanceCountToMessage = new MqttMessage(qos.getBytes());
-            client.publish("request/qos", qosToMessage);
-            client.publish("request/delay", delayToMessage);
-            client.publish("request/instancecount", instanceCountToMessage);
-        } catch (MqttException e) {
-            e.printStackTrace();
+        if (topic.startsWith("counter/")) {
+            int counterValue = Integer.parseInt(payload);
+
+            messageCount++;
+
+            if (lastCounterValue != -1 && counterValue < lastCounterValue) {
+                outOfOrderCount++;
+            }
+            lastCounterValue = counterValue;
+
+            long currentTime = System.currentTimeMillis();
+            if (lastReceivedTime != 0) {
+                long gap = currentTime - lastReceivedTime;
+                totalGap += gap;
+                validGaps++;
+            }
+            lastReceivedTime = currentTime;
         }
     }
+
+    public void analyseData(int qos, int delay, int instanceCount) {
+        System.out.printf("QoS: %d, Delay: %d ms, Instances: %d%n", qos, delay, instanceCount);
+        System.out.printf("Total Messages: %d%n", messageCount);
+        System.out.printf("Out-of-Order Messages: %d%n", outOfOrderCount);
+        System.out.printf("Average Gap: %.2f ms%n", validGaps > 0 ? (double) totalGap / validGaps : 0);
+        System.out.println();
+    }
+    
+    public void resetData() {
+        messageCount = 0;
+        outOfOrderCount = 0;
+        lastReceivedTime = 0;
+        totalGap = 0;
+        validGaps = 0;
+        lastCounterValue = -1;
+    }
+
 
     public static void main(String[] args) {
         String broker = "tcp://localhost:1883";
         String clientId = "AnalyserClient";
-        Analyser analyzer = new Analyser(broker, clientId);
 
-        // Publish requests to the topics
-        analyzer.sendRequest("0", "0", "5"); // Example request: qos=0, delay=0ms, instanceCount=5
+        runAnalyser(broker, clientId);
+    }
 
-        // Keep the program running to listen for messages
+    private static void runAnalyser(String broker, String clientId) {
+        Analyser analyser = new Analyser(broker, clientId);
+
+        // At this point, an analyser has been connected to a specified
+        // MQTT broker. 
+
+        int[] qosLevels             = {0,1,2};
+        int[] delayLevels           = {0,1,2,4};
+        int[] instanceCountLevels   = {1,2,3,4,5};
+
+        runTests(analyser, qosLevels, delayLevels, instanceCountLevels, 0);
+
+        
+        
+        
+    }
+
+    private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels,
+            int recursiveIndex) {
+
+                // Base Case
+                if (recursiveIndex >= (qosLevels.length * delayLevels.length * instanceCountLevels.length)) {
+                    return;
+                }
+
+                // Publish next batch of request to the request topics.
+                int qosIndex            = recursiveIndex % qosLevels.length;
+                int delayIndex          = (recursiveIndex / qosLevels.length) % delayLevels.length;
+                int instanceCountIndex  = recursiveIndex / (qosLevels.length * delayLevels.length);
+
+                int qos             = qosLevels[qosIndex];
+                int delay           = delayLevels[delayIndex];
+                int instanceCount   = instanceCountLevels[instanceCountIndex];
+            
+                analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount));
+
+                // Once the request has been published, the analyser should wait 60 seconds
+                // as it should now listen to the counter topic and take measure
+                
+                try {
+                    analyser.client.subscribe("counter/#", 0);
+                    analyser.analyseData(qos, delay, instanceCount);
+                    analyser.resetData();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                try {
+                    Thread.sleep(60000); // 60 seconds
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                // Recursive case
+                runTests(analyser, qosLevels, delayLevels, instanceCountLevels, recursiveIndex+1);
+
+    }
+
+    /*
+     * This method is what allows the analyser to publish to new
+     * qos, delay and instance count values to the request/[x] topics.
+     */
+    private void sendRequest(String qos, String delay, String instanceCount) {
         try {
-            Thread.sleep(60000); // Listen for messages for 60 seconds
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+            // Generate the message to be published.
+            MqttMessage qosMessage              = new MqttMessage(qos.getBytes());
+            MqttMessage delayMessage            = new MqttMessage(delay.getBytes());
+            MqttMessage instanceCountMessage    = new MqttMessage(instanceCount.getBytes());
 
-        try {
-            analyzer.client.disconnect();
-        } catch (MqttException e) {
+            client.publish("request/qos", qosMessage);
+            client.publish("request/delay", delayMessage);
+            client.publish("request/instancecount", instanceCountMessage);
+
+        } catch (Exception e) {
             e.printStackTrace();
         }
     }
-
-
 
 
 }
