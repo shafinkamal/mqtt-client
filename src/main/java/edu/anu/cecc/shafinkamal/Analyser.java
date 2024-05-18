@@ -63,7 +63,7 @@ public class Analyser implements MqttCallback {
      */
     public void messageArrived(String topic, MqttMessage message) {
         String payload = new String(message.getPayload());
-        System.out.println("Received message: " + payload + "on topic: " + topic);
+        //System.out.println("Received message: " + payload + "on topic: " + topic);
 
         if (topic.startsWith("counter/")) {
             int counterValue = Integer.parseInt(payload);
@@ -107,60 +107,42 @@ public class Analyser implements MqttCallback {
 
     private static void runAnalyser(String broker, String clientId) {
         Analyser analyser = new Analyser(broker, clientId);
-
-        // At this point, an analyser has been connected to a specified
-        // MQTT broker. 
-
-        int[] qosLevels             = {0,1,2};
-        int[] delayLevels           = {0,1,2,4};
-        int[] instanceCountLevels   = {1,2,3,4,5};
-
-        runTests(analyser, qosLevels, delayLevels, instanceCountLevels, 0);
-
-        
-        
-        
+    
+        // At this point, an analyser has been connected to a specified MQTT broker. 
+        int[] qosLevels = {0, 1, 2};
+        int[] delayLevels = {0, 1, 2, 4};
+        int[] instanceCountLevels = {1, 2, 3, 4, 5};
+    
+        runTests(analyser, qosLevels, delayLevels, instanceCountLevels);
     }
-
-    private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels,
-            int recursiveIndex) {
-
-                int[] subscriptionQoSLevels = {0,1,2};
-
-
-                // Base Case
-                if (recursiveIndex >= (qosLevels.length * delayLevels.length * instanceCountLevels.length)) {
-                    return;
-                }
-
-                for (int instanceCount : instanceCountLevels) {
-                    for (int qos : qosLevels) {
-                        for (int delay : delayLevels) {
-                            analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount));
-
-                            for (int subQos : subscriptionQoSLevels) {
-                                try {
-                                    analyser.client.subscribe("counter/#", subQos);
-                                    Thread.sleep(5000); // 5 seconds
-                                    analyser.analyseData(qos, delay, instanceCount);
-                                    analyser.resetData();
-                                    analyser.client.unsubscribe("counter/#");
-                                } catch (Exception e) {
-                                    e.printStackTrace();
-                                }
-                            }
+    
+    private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels) {
+        int[] subscriptionQoSLevels = {0, 1, 2};
+    
+        for (int instanceCount : instanceCountLevels) {
+            for (int qos : qosLevels) {
+                for (int delay : delayLevels) {
+                    analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount));
+    
+                    for (int subQoS : subscriptionQoSLevels) {
+                        try {
+                            analyser.client.subscribe("counter/#", subQoS);
+    
+                            // Wait for 2 seconds to collect data for testing
+                            Thread.sleep(1000);
+    
+                            analyser.analyseData(qos, delay, instanceCount);
+                            analyser.resetData();
+                            analyser.client.unsubscribe("counter/#");
+                        } catch (Exception e) {
+                            e.printStackTrace();
                         }
                     }
                 }
-
-                // Once the request has been published, the analyser should wait 60 seconds
-                // as it should now listen to the counter topic and take measure
-            
-
-                // Recursive case
-                runTests(analyser, qosLevels, delayLevels, instanceCountLevels, recursiveIndex+1);
-
+            }
+        }
     }
+    
 
     /*
      * This method is what allows the analyser to publish to new
