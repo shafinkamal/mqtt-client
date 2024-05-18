@@ -49,18 +49,21 @@ public class PublisherInstance implements Runnable {
                 }
 
                 public void deliveryComplete(IMqttToken token) {
-                    System.out.println(clientId + " deliveryComplete: " + token.isComplete());
+                    //System.out.println(clientId + " deliveryComplete: " + token.isComplete());
                 }
 
                 public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    System.out.println("MESSAGE ARRIVED!");
+                    //System.out.println("MESSAGE ARRIVED!");
 
                     if (topic.equals("request/qos")) {
                         requestedQoS = Integer.parseInt(new String(message.getPayload()));
+                        System.out.println("requestedQoS: " + requestedQoS);
                     } else if (topic.equals("request/delay")) {
                         requestedDelay = Integer.parseInt(new String(message.getPayload()));
+                        System.out.println("requestedDelay: " + requestedDelay);
                     } else if (topic.equals("request/instancecount")) {
                         requestedInstanceCount = Integer.parseInt(new String(message.getPayload()));
+                        System.out.println("requestedInstanceCount: " + requestedInstanceCount);
                     }
                 }
 
@@ -84,11 +87,11 @@ public class PublisherInstance implements Runnable {
                 //System.out.println("instanceID: " + instanceId);
                 //System.out.println("requestedInstanceCount: " + requestedInstanceCount);
                 if (instanceId <= requestedInstanceCount) {
-                    System.out.println("if (instanceId <= requestedInstanceCount)");
+                    //System.out.println("if (instanceId <= requestedInstanceCount)");
                     publishMessages();
                 } else {
                     // Stay quiet if this instance is not supposed to be active
-                    Thread.sleep(1000);
+                    Thread.sleep(5000);
                 }
             }
 
@@ -100,13 +103,13 @@ public class PublisherInstance implements Runnable {
     private void publishMessages() throws MqttException, InterruptedException {
         int counter = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime < 60000) { // Publish for 60 seconds
+        while (System.currentTimeMillis() - startTime < 5000) { // Publish for 60 seconds
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
-            System.out.println(topic);
+            //System.out.println(topic);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
             client.publish(topic, message);
-            System.out.println(counter);
+            //System.out.println("Message published: " + counter + " on topic: " + topic);
             counter++;
             Thread.sleep(requestedDelay);
             //System.out.println("did the publisher wake up?");

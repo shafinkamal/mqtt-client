@@ -44,7 +44,7 @@ public class Analyser implements MqttCallback {
     }
 
     public void deliveryComplete(IMqttToken token) {
-        System.out.println("deliveryComplete: " + token.isComplete());
+        //System.out.println("deliveryComplete: " + token.isComplete());
     }
 
     public void mqttErrorOccurred(MqttException exception) {
@@ -86,11 +86,11 @@ public class Analyser implements MqttCallback {
     }
 
     public void analyseData(int qos, int delay, int instanceCount) {
-        System.out.printf("QoS: %d, Delay: %d ms, Instances: %d%n", qos, delay, instanceCount);
-        System.out.printf("Total Messages: %d%n", messageCount);
-        System.out.printf("Out-of-Order Messages: %d%n", outOfOrderCount);
-        System.out.printf("Average Gap: %.2f ms%n", validGaps > 0 ? (double) totalGap / validGaps : 0);
-        System.out.println();
+        //System.out.printf("QoS: %d, Delay: %d ms, Instances: %d%n", qos, delay, instanceCount);
+        //System.out.printf("Total Messages: %d%n", messageCount);
+        //System.out.printf("Out-of-Order Messages: %d%n", outOfOrderCount);
+        //System.out.printf("Average Gap: %.2f ms%n", validGaps > 0 ? (double) totalGap / validGaps : 0);
+        //System.out.println();
     }
     
     public void resetData() {
@@ -103,12 +103,7 @@ public class Analyser implements MqttCallback {
     }
 
 
-    public static void main(String[] args) {
-        String broker = "tcp://localhost:1883";
-        String clientId = "AnalyserClient";
-
-        runAnalyser(broker, clientId);
-    }
+    
 
     private static void runAnalyser(String broker, String clientId) {
         Analyser analyser = new Analyser(broker, clientId);
@@ -130,38 +125,37 @@ public class Analyser implements MqttCallback {
     private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels,
             int recursiveIndex) {
 
+                int[] subscriptionQoSLevels = {0,1,2};
+
+
                 // Base Case
                 if (recursiveIndex >= (qosLevels.length * delayLevels.length * instanceCountLevels.length)) {
                     return;
                 }
 
-                // Publish next batch of request to the request topics.
-                int qosIndex            = recursiveIndex % qosLevels.length;
-                int delayIndex          = (recursiveIndex / qosLevels.length) % delayLevels.length;
-                int instanceCountIndex  = recursiveIndex / (qosLevels.length * delayLevels.length);
+                for (int instanceCount : instanceCountLevels) {
+                    for (int qos : qosLevels) {
+                        for (int delay : delayLevels) {
+                            analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount));
 
-                int qos             = qosLevels[qosIndex];
-                int delay           = delayLevels[delayIndex];
-                int instanceCount   = instanceCountLevels[instanceCountIndex];
-            
-                analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount));
+                            for (int subQos : subscriptionQoSLevels) {
+                                try {
+                                    analyser.client.subscribe("counter/#", subQos);
+                                    Thread.sleep(5000); // 5 seconds
+                                    analyser.analyseData(qos, delay, instanceCount);
+                                    analyser.resetData();
+                                    analyser.client.unsubscribe("counter/#");
+                                } catch (Exception e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Once the request has been published, the analyser should wait 60 seconds
                 // as it should now listen to the counter topic and take measure
-                
-                try {
-                    analyser.client.subscribe("counter/#", 0);
-                    analyser.analyseData(qos, delay, instanceCount);
-                    analyser.resetData();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-
-                try {
-                    Thread.sleep(60000); // 60 seconds
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+            
 
                 // Recursive case
                 runTests(analyser, qosLevels, delayLevels, instanceCountLevels, recursiveIndex+1);
@@ -186,6 +180,13 @@ public class Analyser implements MqttCallback {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    public static void main(String[] args) {
+        String broker = "tcp://localhost:1883";
+        String clientId = "AnalyserClient";
+
+        runAnalyser(broker, clientId);
     }
 
 
