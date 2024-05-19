@@ -72,7 +72,7 @@ public class Analyser implements MqttCallback {
      */
     public void messageArrived(String topic, MqttMessage message) {
         String payload = new String(message.getPayload());
-        //System.out.println("Received message: " + payload + "on topic: " + topic);
+        System.out.println("Received message: " + payload + "on topic: " + topic);
 
         if (topic.startsWith("counter/")) {
             int counterValue = Integer.parseInt(payload);
@@ -124,6 +124,7 @@ public class Analyser implements MqttCallback {
                         try {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
+
                             Thread.sleep(2000);
                             analyser.measurePerformance(qos, delay, instanceCount, subQoS);
                             analyser.client.unsubscribe(topic);

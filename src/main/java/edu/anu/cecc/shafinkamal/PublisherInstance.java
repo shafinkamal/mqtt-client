@@ -110,7 +110,7 @@ public class PublisherInstance implements Runnable {
             message.setQos(requestedQoS);
             client.publish(topic, message);
             publishedMessagesCount++;
-            System.out.println("Published message: " + counter + " to topic: " + topic);
+            //System.out.println("Published message: " + counter + " to topic: " + topic);
             counter++;
             Thread.sleep(requestedDelay);
         }
