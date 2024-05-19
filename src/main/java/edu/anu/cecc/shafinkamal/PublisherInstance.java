@@ -21,6 +21,7 @@ public class PublisherInstance implements Runnable {
     static int requestedDelay;
     static int requestedInstanceCount;
     private boolean newConfigurationReceived = false; // Add this flag to indicate new configuration
+    int publishedMessagesCount = 0;
 
 
     /*
@@ -89,7 +90,7 @@ public class PublisherInstance implements Runnable {
                     publishMessages();
                 } else {
                     // Stay quiet if this instance is not supposed to be active
-                    Thread.sleep(1000);
+                    Thread.sleep(2000);
                 }
             }
     
@@ -103,16 +104,25 @@ public class PublisherInstance implements Runnable {
         int counter = 0; // Reset counter at the start of each cycle
         long startTime = System.currentTimeMillis();
         System.out.println("Starting publishing cycle for instance: " + instanceId);
-        while (System.currentTimeMillis() - startTime < 1000) { // Publish for 5 seconds for testing
+        while (System.currentTimeMillis() - startTime < 2000) { // Publish for 5 seconds for testing
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
             client.publish(topic, message);
+            publishedMessagesCount++;
             System.out.println("Published message: " + counter + " to topic: " + topic);
             counter++;
             Thread.sleep(requestedDelay);
         }
         System.out.println("Published " + counter + " messages in 5 seconds.");
         System.out.println("Ending publishing cycle for instance: " + instanceId);
+    }
+
+    public int getPublishedMessagesCount() {
+        return publishedMessagesCount;
+    }
+
+    public void resetPublishedMessagesCount() {
+        publishedMessagesCount = 0;
     }
 }
