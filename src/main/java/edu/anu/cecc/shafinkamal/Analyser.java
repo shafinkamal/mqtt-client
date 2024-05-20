@@ -12,8 +12,15 @@ import org.eclipse.paho.mqttv5.common.MqttMessage;
 import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
 import java.util.ArrayList;
 import java.io.FileWriter;
+import java.io.BufferedReader; // Add this line to import the BufferedReader class
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.concurrent.CountDownLatch; // Add this line to import the CountDownLatch class
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Collections;
 
-public class Analyser implements MqttCallback {
+public class Analyser implements MqttCallback, Runnable {
 
     private String broker;
     private String clientId;
@@ -28,7 +35,11 @@ public class Analyser implements MqttCallback {
 
     private ArrayList<String[]> totalRateStatsArrayList = new ArrayList<>();    
     private ArrayList<String[]> messageLossStatsArrayList = new ArrayList<>();
-    private ArrayList<String[]> outOfOrderMessagesStatsArrayList = new ArrayList<>();
+    private ArrayList<String[]> outOfOrderStatsArrayList = new ArrayList<>();
+    private Map<String, Integer> lastCounterValues = new HashMap<>(); // To track last counter values for each publisher
+    private Map<String, Long> lastTimestamps = new HashMap<>(); // To track last timestamps for each publisher
+    private Map<String, ArrayList<Long>> gaps = new HashMap<>(); // To track gaps for each publisher
+    private ArrayList<String[]> medianMessageGapsArrayList = new ArrayList<>();
 
 
 
@@ -71,22 +82,43 @@ public class Analyser implements MqttCallback {
      * 
      */
     public void messageArrived(String topic, MqttMessage message) {
+        long currentTimeMillis = System.currentTimeMillis();
         String payload = new String(message.getPayload());
-        System.out.println("Received message: " + payload + "on topic: " + topic);
+        //System.out.println("Received message: " + payload + "on topic: " + topic);
 
         if (topic.startsWith("counter/")) {
             int counterValue = Integer.parseInt(payload);
 
             // updated how many messages is being seen in this topic.
             messageCount++;
+            MessageCountManager.getInstance().incrementReceivedCount(topic);            
 
-            // Check if the counter value is out of order.
-            if (counterValue != -1 && counterValue < lastCounterValue) {
-                outOfOrderCount++;
+            String[] topicParts = topic.split("/");
+            String publisherID = topicParts[1] + "_" + topicParts[2] + "_" + topicParts[3];
+
+            synchronized (gaps) {
+                if (lastTimestamps.containsKey(publisherID)) {
+                    long gap = currentTimeMillis - lastTimestamps.get(publisherID);
+                    if (counterValue == lastCounterValues.get(publisherID) + 1) {
+                        gaps.computeIfAbsent(publisherID, k -> new ArrayList<>()).add(gap);
+                    }
+                }
+                lastTimestamps.put(publisherID, currentTimeMillis);
             }
+
+            if (lastCounterValues.containsKey(publisherID)) {
+                if (counterValue < lastCounterValues.get(publisherID)) {
+                    outOfOrderCount++;
+
+                }
+            }
+            lastCounterValues.put(publisherID, counterValue);
 
             // Update the last counter value.
             lastCounterValue = counterValue;
+
+
+
         }
     }
     
@@ -101,10 +133,12 @@ public class Analyser implements MqttCallback {
 
 
     
+@Override
+public void run() {
 
-    private static void runAnalyser(String broker, String clientId) {
+    try {
         Analyser analyser = new Analyser(broker, clientId);
-    
+
         // At this point, an analyser has been connected to a specified MQTT broker. 
         int[] qosLevels = {0, 1, 2};
         int[] delayLevels = {0, 1, 2, 4};
@@ -112,7 +146,12 @@ public class Analyser implements MqttCallback {
     
         runTests(analyser, qosLevels, delayLevels, instanceCountLevels);
         analyser.writeCSVFiles();
+    } catch (Exception e) {
+        e.printStackTrace();
     }
+}
+    
+
     
     private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels) {
         int[] subscriptionQoSLevels = {0, 1, 2};
@@ -125,7 +164,7 @@ public class Analyser implements MqttCallback {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
 
-                            Thread.sleep(2000);
+                            Thread.sleep(10000);
                             analyser.measurePerformance(qos, delay, instanceCount, subQoS);
                             analyser.client.unsubscribe(topic);
                         } catch (Exception e) {
@@ -139,11 +178,90 @@ public class Analyser implements MqttCallback {
     
 
     private void measurePerformance(int qos, int delay, int instanceCount, int subQoS) {
-        // Update the CSV data for the current configuration.
-        updateCsvData(qos, delay, instanceCount, subQoS);
+        // Average rate of messages received per second.
+        double rate = (double) messageCount / 10;
+        totalRateStatsArrayList.add(new String[] {
+            String.valueOf(instanceCount),
+            String.valueOf(qos),
+            String.valueOf(delay),
+            String.valueOf(subQoS),
+            String.valueOf(rate)
+        });
+    
+        
+        String key = String.format("%d_%d_%d", instanceCount, qos, delay);
+        int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
+        int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
+        //System.out.println("Total Published Messages: " + totalPublishedMessages);
+        System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
+    
+        
+        // Check if totalPublishedMessages is zero to avoid division by zero
+        
+            double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
+            System.out.println("Message loss rate: " + messageLossRate);
+            //System.out.println("Message loss rate: " + messageLossRate);
+            //System.out.println("Message loss rate: " + messageLossRate);
+            messageLossStatsArrayList.add(new String[] {
+                String.valueOf(instanceCount),
+                String.valueOf(qos),
+                String.valueOf(delay),
+                String.valueOf(subQoS),
+                String.valueOf(messageLossRate)
+            });
+
+            double outOfOrderRate = (double) outOfOrderCount / messageCount * 100;
+            outOfOrderStatsArrayList.add(new String[] {
+                String.valueOf(instanceCount),
+                String.valueOf(qos),
+                String.valueOf(delay),
+                String.valueOf(subQoS),
+                String.valueOf(outOfOrderRate)
+            });
+
+            // Make a copy of the gaps map to avoid ConcurrentModificationException
+            Map<String, ArrayList<Long>> gapsCopy;
+            synchronized (gaps) {
+                gapsCopy = new HashMap<>(gaps);
+            }
+
+            long totalMedianGap = 0;
+            int publisherCount = 0;
+
+            for (Map.Entry<String, ArrayList<Long>> entry : gapsCopy.entrySet()) {
+                ArrayList<Long> gapList = new ArrayList<>(entry.getValue());
+                Collections.sort(gapList);
+                long medianGap = gapList.get(gapList.size() / 2);
+                totalMedianGap += medianGap;
+                publisherCount++;
+                //System.out.println("Publisher: " + entry.getKey() + ", Median Gap: " + medianGap);
+            }
+
+            if (publisherCount > 0) {
+                long averageMedianGap = totalMedianGap / publisherCount;
+                //System.out.println("Average Median Gap: " + averageMedianGap);
+                medianMessageGapsArrayList.add(new String[] {
+                    String.valueOf(instanceCount),
+                    String.valueOf(qos),
+                    String.valueOf(delay),
+                    String.valueOf(subQoS),
+                    String.valueOf(averageMedianGap)
+                });
+            }
+        
+
+        //System.out.println(messageCount + " messages received by the analyser before resetting data."); 
+    
         // Reset the data for the next configuration.
         resetData();
-        }
+
+        //System.out.println(messageCount + "messages received by the analyser after resetting data.");
+    }
+
+    
+    
+    
+    
 
     /*
      * This method is what allows the analyser to publish to new
@@ -161,50 +279,12 @@ public class Analyser implements MqttCallback {
             client.publish("request/instancecount", instanceCountMessage);
 
             testNumber++;
-            System.out.println("Test number: " + testNumber + " at subQoS: " + subQoS);
+            //System.out.println("Test number: " + testNumber + " at subQoS: " + subQoS);
             
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
-
-    public void updateCsvData(int qos, int delay, int instanceCount, int subQoS) {
-        // Average rate of messages received per second.
-        double rate = (double) messageCount / 2;
-        totalRateStatsArrayList.add(new String[] {
-            String.valueOf(instanceCount), 
-            String.valueOf(qos), 
-            String.valueOf(delay), 
-            String.valueOf(subQoS),
-            String.valueOf(rate)});
-        
-        // Measure out of order messages rate.
-        double outOfOrderRate = (double) outOfOrderCount / messageCount * 100;
-        outOfOrderMessagesStatsArrayList.add(new String[] {
-            String.valueOf(instanceCount), 
-            String.valueOf(qos), 
-            String.valueOf(delay), 
-            String.valueOf(subQoS), 
-            String.valueOf(outOfOrderRate)});
-
-        // Message loss rate.
-        // Calculate expected number of messages for this combination.
-        /*
-        int expectedMessages    = (2000 / delay) * instanceCount;
-        double messageLossRate  = (1 - (double) messageCount / expectedMessages) * 100;
-
-        messageLossStatsArrayList.add(new String[] {
-            String.valueOf(instanceCount), 
-            String.valueOf(qos), 
-            String.valueOf(delay), 
-            String.valueOf(subQoS), 
-            String.valueOf(messageLossRate)});
-        */
-
-
-        
-        
-}
 
     public void writeCSVFiles() {
         // Write the average message data to a CSV file.
@@ -219,9 +299,9 @@ public class Analyser implements MqttCallback {
             e.printStackTrace();
         }
 
-        // Write the out of order message data to a CSV file.
-        try (FileWriter csvWriter = new FileWriter("outOfOrderRate.csv")){
-            for (String[] rowData : outOfOrderMessagesStatsArrayList) {
+        // Write the message loss to a CSV file.
+        try (FileWriter csvWriter = new FileWriter("messageLossStats.csv")){
+            for (String[] rowData : messageLossStatsArrayList) {
                 csvWriter.append(String.join(",", rowData));
                 csvWriter.append("\n");
             }
@@ -231,15 +311,28 @@ public class Analyser implements MqttCallback {
             e.printStackTrace();
         }
 
+        // Write the out of order stats to a CSV file.
+        try (FileWriter csvWriter = new FileWriter("outOfOrderStats.csv")){
+            for (String[] rowData : outOfOrderStatsArrayList) {
+                csvWriter.append(String.join(",", rowData));
+                csvWriter.append("\n");
+            }
+            csvWriter.flush();
+        } catch (Exception e) {
+            System.out.println("Something went wrong writing the CSV file.");
+            e.printStackTrace();
+        }
+
+        // Write the median message gaps to a CSV file.
+        try (FileWriter csvWriter = new FileWriter("medianMessageGaps.csv")) {
+            for (String[] rowData : medianMessageGapsArrayList) {
+                csvWriter.append(String.join(",", rowData));
+                csvWriter.append("\n");
+            }
+            csvWriter.flush();
+        } catch (Exception e) {
+            System.out.println("Something went wrong writing the CSV file.");
+            e.printStackTrace();
+        }
     }
-
-
-    public static void main(String[] args) {
-        String broker = "tcp://localhost:1883";
-        String clientId = "AnalyserClient";
-
-        runAnalyser(broker, clientId);
-    }
-
-
 }

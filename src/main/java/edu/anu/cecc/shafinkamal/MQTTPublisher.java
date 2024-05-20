@@ -1,25 +1,28 @@
 package edu.anu.cecc.shafinkamal;
 
-import org.eclipse.paho.mqttv5.client.IMqttToken;
-import org.eclipse.paho.mqttv5.client.MqttCallback;
-import org.eclipse.paho.mqttv5.client.MqttClient;
-import org.eclipse.paho.mqttv5.client.MqttConnectionOptions;
-import org.eclipse.paho.mqttv5.client.MqttDisconnectResponse;
-import org.eclipse.paho.mqttv5.common.MqttException;
-import org.eclipse.paho.mqttv5.common.MqttMessage;
-import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
+import java.util.concurrent.CountDownLatch;
 
 public class MQTTPublisher {
-    
-        public static void main(String[] args) {
-            String broker = "tcp://localhost:1883";
-            int subQos = 1;
-            int pubQos = 1;
-    
-            for (int i = 1; i <= 5; i++) {
-                String clientId = "pub-" + i;
-                new Thread(new PublisherInstance(broker, clientId, subQos, pubQos, i)).start();
-            }
-        
+
+    public static void main(String[] args) {
+        String broker = "tcp://localhost:1883";
+        int subQos = 1;
+        int pubQos = 1;
+
+        int instanceCount = 5; // Number of publisher instances
+
+        for (int i = 1; i <= instanceCount; i++) {
+            String clientId = "pub-" + i;
+            new Thread(new PublisherInstance(broker, clientId, subQos, pubQos, i)).start();
+        }
+
+        try {
+            Thread.sleep(10000);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("Starting the analyser");
+        new Thread(new Analyser(broker, "analyser")).start();
     }
 }

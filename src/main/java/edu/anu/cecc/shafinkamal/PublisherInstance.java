@@ -9,6 +9,9 @@ import org.eclipse.paho.mqttv5.common.MqttException;
 import org.eclipse.paho.mqttv5.common.MqttMessage;
 import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
 
+import java.io.FileWriter;
+import java.util.concurrent.CountDownLatch;
+
 public class PublisherInstance implements Runnable {
 
     private String broker;
@@ -20,13 +23,8 @@ public class PublisherInstance implements Runnable {
     static int requestedQoS;
     static int requestedDelay;
     static int requestedInstanceCount;
-    private boolean newConfigurationReceived = false; // Add this flag to indicate new configuration
-    int publishedMessagesCount = 0;
+    private boolean newConfigurationReceived = false;
 
-
-    /*
-     * Publisher instance constructor
-     */
     public PublisherInstance(String broker, String clientId, int subQos, int pubQos, int instanceId) {
         this.broker = broker;
         this.clientId = clientId;
@@ -40,89 +38,74 @@ public class PublisherInstance implements Runnable {
         try {
             client = new MqttClient(broker, clientId);
             MqttConnectionOptions options = new MqttConnectionOptions();
-    
+
             client.setCallback(new MqttCallback() {
                 public void connectComplete(boolean reconnect, String serverURI) {
                     System.out.println(clientId + " connected to: " + serverURI);
                 }
-    
+
                 public void disconnected(MqttDisconnectResponse disconnectResponse) {
                     System.out.println(clientId + " disconnected: " + disconnectResponse.getReasonString());
                 }
-    
+
                 public void deliveryComplete(IMqttToken token) {
                     //System.out.println(clientId + " deliveryComplete: " + token.isComplete());
                 }
-    
+
                 public void messageArrived(String topic, MqttMessage message) throws Exception {
                     if (topic.equals("request/qos")) {
                         requestedQoS = Integer.parseInt(new String(message.getPayload()));
-                        System.out.println("requestedQoS: " + requestedQoS);
                     } else if (topic.equals("request/delay")) {
                         requestedDelay = Integer.parseInt(new String(message.getPayload()));
-                        System.out.println("requestedDelay: " + requestedDelay);
                     } else if (topic.equals("request/instancecount")) {
                         requestedInstanceCount = Integer.parseInt(new String(message.getPayload()));
-                        System.out.println("requestedInstanceCount: " + requestedInstanceCount);
                     }
-                    newConfigurationReceived = true; // Set the flag when a new configuration message is received
+                    newConfigurationReceived = true;
                 }
-    
+
                 public void mqttErrorOccurred(MqttException exception) {
                     System.out.println(clientId + " mqttErrorOccurred: " + exception.getMessage());
                 }
-    
+
                 public void authPacketArrived(int reasonCode, MqttProperties properties) {
                     System.out.println(clientId + " authPacketArrived");
                 }
             });
-    
+
             client.connect(options);
-    
+
             client.subscribe("request/qos", subQos);
             client.subscribe("request/delay", subQos);
             client.subscribe("request/instancecount", subQos);
-    
+
             while (true) {
                 if (newConfigurationReceived && instanceId <= requestedInstanceCount) {
-                    newConfigurationReceived = false; // Reset the flag before starting a new publishing cycle
-                    System.out.println(clientId + " is active. Starting to publish messages.");
+                    newConfigurationReceived = false;
                     publishMessages();
                 } else {
-                    // Stay quiet if this instance is not supposed to be active
-                    Thread.sleep(2000);
+                    Thread.sleep(10000);
                 }
             }
-    
+
         } catch (MqttException | InterruptedException e) {
             e.printStackTrace();
         }
     }
-    
 
     private void publishMessages() throws MqttException, InterruptedException {
-        int counter = 0; // Reset counter at the start of each cycle
+        int counter = 0;
         long startTime = System.currentTimeMillis();
-        System.out.println("Starting publishing cycle for instance: " + instanceId);
-        while (System.currentTimeMillis() - startTime < 2000) { // Publish for 5 seconds for testing
+        while (System.currentTimeMillis() - startTime < 10000) {
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
             client.publish(topic, message);
-            publishedMessagesCount++;
-            //System.out.println("Published message: " + counter + " to topic: " + topic);
             counter++;
             Thread.sleep(requestedDelay);
         }
-        System.out.println("Published " + counter + " messages in 5 seconds.");
-        System.out.println("Ending publishing cycle for instance: " + instanceId);
-    }
-
-    public int getPublishedMessagesCount() {
-        return publishedMessagesCount;
-    }
-
-    public void resetPublishedMessagesCount() {
-        publishedMessagesCount = 0;
+        String key = String.format("%d_%d_%d", requestedInstanceCount, requestedQoS, requestedDelay);
+        MessageCountManager.getInstance().incrementPublishedCount(key, counter);
+        System.out.println("publisher's key: " + key + " counter: " + counter);
+        System.out.println(instanceId + "published " + counter + " messages.");
     }
 }
