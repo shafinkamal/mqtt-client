@@ -40,6 +40,11 @@ public class Analyser implements MqttCallback, Runnable {
     private Map<String, Long> lastTimestamps = new HashMap<>(); // To track last timestamps for each publisher
     private Map<String, ArrayList<Long>> gaps = new HashMap<>(); // To track gaps for each publisher
     private ArrayList<String[]> medianMessageGapsArrayList = new ArrayList<>();
+    private Map<String, ArrayList<String[]>> sysMetrics = new HashMap<>();
+    private int currentQoS;
+    private int currentDelay;
+    private int currentInstanceCount;
+
 
 
 
@@ -68,7 +73,7 @@ public class Analyser implements MqttCallback, Runnable {
     }
 
     public void mqttErrorOccurred(MqttException exception) {
-        System.out.println("mqttErrorOccurred: " + exception.getMessage());
+        //System.out.println("mqttErrorOccurred: " + exception.getMessage());
     }
 
     public void authPacketArrived(int reasonCode, MqttProperties properties) {
@@ -116,9 +121,16 @@ public class Analyser implements MqttCallback, Runnable {
 
             // Update the last counter value.
             lastCounterValue = counterValue;
+        } else if (topic.startsWith("$SYS/")) {
+            handleSysMessage(topic, payload, currentTimeMillis);
+        }
+    }
 
-
-
+    private void handleSysMessage(String topic, String payload, long timestamp) {
+        synchronized (sysMetrics) {
+            String key = String.format("%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, topic);
+            ArrayList<String[]> metricsList = sysMetrics.computeIfAbsent(key, k -> new ArrayList<>());
+            metricsList.add(new String[]{String.valueOf(timestamp), payload});
         }
     }
     
@@ -155,31 +167,44 @@ public void run() {
     
     private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels) {
         int[] subscriptionQoSLevels = {0, 1, 2};
-        for (int subQoS : subscriptionQoSLevels) {
-            for (int instanceCount : instanceCountLevels) {
-                for (int qos : qosLevels) {
-                    for (int delay : delayLevels) {
-                        analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount), subQoS);
-                        try {
-                            String topic = String.format("counter/#", instanceCount, qos, delay);
-                            analyser.client.subscribe(topic, subQoS);
+        try {
+            analyser.client.subscribe("$SYS/#", 1);
 
-                            Thread.sleep(10000);
-                            analyser.measurePerformance(qos, delay, instanceCount, subQoS);
-                            analyser.client.unsubscribe(topic);
-                        } catch (Exception e) {
-                            e.printStackTrace();
+            for (int subQoS : subscriptionQoSLevels) {
+                for (int instanceCount : instanceCountLevels) {
+                    for (int qos : qosLevels) {
+                        for (int delay : delayLevels) {
+                            analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount), subQoS);
+                            try {
+                                String topic = String.format("counter/#", instanceCount, qos, delay);
+                                analyser.client.subscribe(topic, subQoS);
+    
+                                Thread.sleep(60000);
+                                analyser.measurePerformance(qos, delay, instanceCount, subQoS);
+                                analyser.client.unsubscribe(topic);
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
                         }
                     }
                 }
             }
+
+            analyser.client.unsubscribe("$SYS/#");
+        } catch (Exception e) {
+           e.printStackTrace();
         }
+        
     }
     
 
     private void measurePerformance(int qos, int delay, int instanceCount, int subQoS) {
+
+        currentQoS = qos;
+        currentDelay = delay;
+        currentInstanceCount = instanceCount;
         // Average rate of messages received per second.
-        double rate = (double) messageCount / 10;
+        double rate = (double) messageCount / 60;
         totalRateStatsArrayList.add(new String[] {
             String.valueOf(instanceCount),
             String.valueOf(qos),
@@ -193,13 +218,13 @@ public void run() {
         int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
         int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
         //System.out.println("Total Published Messages: " + totalPublishedMessages);
-        System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
+        //System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
     
         
         // Check if totalPublishedMessages is zero to avoid division by zero
         
             double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
-            System.out.println("Message loss rate: " + messageLossRate);
+            //System.out.println("Message loss rate: " + messageLossRate);
             //System.out.println("Message loss rate: " + messageLossRate);
             //System.out.println("Message loss rate: " + messageLossRate);
             messageLossStatsArrayList.add(new String[] {
@@ -248,6 +273,8 @@ public void run() {
                     String.valueOf(averageMedianGap)
                 });
             }
+
+            
         
 
         //System.out.println(messageCount + " messages received by the analyser before resetting data."); 
@@ -295,7 +322,7 @@ public void run() {
             }
             csvWriter.flush();
         } catch (Exception e) {
-            System.out.println("Something went wrong writing the CSV file.");
+            //System.out.println("Something went wrong writing the CSV file.");
             e.printStackTrace();
         }
 
@@ -332,6 +359,21 @@ public void run() {
             csvWriter.flush();
         } catch (Exception e) {
             System.out.println("Something went wrong writing the CSV file.");
+            e.printStackTrace();
+        }
+        // Write the $SYS/# metrics to a CSV file
+        try (FileWriter csvWriter = new FileWriter("sysMetrics.csv")) {
+            for (Map.Entry<String, ArrayList<String[]>> entry : sysMetrics.entrySet()) {
+                String syskey = entry.getKey();
+                for (String[] rowData : entry.getValue()) {
+                    csvWriter.append(syskey).append(",");
+                    csvWriter.append(String.join(",", rowData));
+                    csvWriter.append("\n");
+                }
+            }
+            csvWriter.flush();
+        } catch (Exception e) {
+            System.out.println("Something went wrong writing the sysMetrics CSV file.");
             e.printStackTrace();
         }
     }

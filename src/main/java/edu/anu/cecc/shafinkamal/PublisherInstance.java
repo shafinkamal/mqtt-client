@@ -41,11 +41,11 @@ public class PublisherInstance implements Runnable {
 
             client.setCallback(new MqttCallback() {
                 public void connectComplete(boolean reconnect, String serverURI) {
-                    System.out.println(clientId + " connected to: " + serverURI);
+                    //System.out.println(clientId + " connected to: " + serverURI);
                 }
 
                 public void disconnected(MqttDisconnectResponse disconnectResponse) {
-                    System.out.println(clientId + " disconnected: " + disconnectResponse.getReasonString());
+                    //System.out.println(clientId + " disconnected: " + disconnectResponse.getReasonString());
                 }
 
                 public void deliveryComplete(IMqttToken token) {
@@ -64,11 +64,11 @@ public class PublisherInstance implements Runnable {
                 }
 
                 public void mqttErrorOccurred(MqttException exception) {
-                    System.out.println(clientId + " mqttErrorOccurred: " + exception.getMessage());
+                    //System.out.println(clientId + " mqttErrorOccurred: " + exception.getMessage());
                 }
 
                 public void authPacketArrived(int reasonCode, MqttProperties properties) {
-                    System.out.println(clientId + " authPacketArrived");
+                    //System.out.println(clientId + " authPacketArrived");
                 }
             });
 
@@ -83,7 +83,7 @@ public class PublisherInstance implements Runnable {
                     newConfigurationReceived = false;
                     publishMessages();
                 } else {
-                    Thread.sleep(10000);
+                    Thread.sleep(60000);
                 }
             }
 
@@ -95,7 +95,7 @@ public class PublisherInstance implements Runnable {
     private void publishMessages() throws MqttException, InterruptedException {
         int counter = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime < 10000) {
+        while (System.currentTimeMillis() - startTime < 60000) {
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
@@ -105,7 +105,5 @@ public class PublisherInstance implements Runnable {
         }
         String key = String.format("%d_%d_%d", requestedInstanceCount, requestedQoS, requestedDelay);
         MessageCountManager.getInstance().incrementPublishedCount(key, counter);
-        System.out.println("publisher's key: " + key + " counter: " + counter);
-        System.out.println(instanceId + "published " + counter + " messages.");
     }
 }
