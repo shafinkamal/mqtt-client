@@ -4,6 +4,7 @@ import org.eclipse.paho.mqttv5.client.MqttCallback;
 import org.eclipse.paho.mqttv5.client.MqttClient;
 import org.eclipse.paho.mqttv5.client.MqttConnectionOptions;
 import org.eclipse.paho.mqttv5.client.MqttDisconnectResponse;
+import org.eclipse.paho.mqttv5.client.MqttToken;
 import org.eclipse.paho.mqttv5.client.IMqttDeliveryToken;
 import org.eclipse.paho.mqttv5.client.IMqttToken;
 import org.eclipse.paho.mqttv5.client.persist.MemoryPersistence;
@@ -24,7 +25,7 @@ public class Analyser implements MqttCallback, Runnable {
 
     private String broker;
     private String clientId;
-    private MqttClient client;
+    private MqttAsyncClient client;
     private int messageCount = 0;
     private int outOfOrderCount = 0;
     private long lastReceivedTime = 0;
@@ -40,6 +41,11 @@ public class Analyser implements MqttCallback, Runnable {
     private Map<String, Long> lastTimestamps = new HashMap<>(); // To track last timestamps for each publisher
     private Map<String, ArrayList<Long>> gaps = new HashMap<>(); // To track gaps for each publisher
     private ArrayList<String[]> medianMessageGapsArrayList = new ArrayList<>();
+    private Map<String, ArrayList<String[]>> sysMetrics = new HashMap<>();
+    private int currentQoS;
+    private int currentDelay;
+    private int currentInstanceCount;
+
 
 
 
@@ -47,9 +53,10 @@ public class Analyser implements MqttCallback, Runnable {
         this.broker = broker;
         this.clientId = clientId;
         try {
-            client = new MqttClient(broker, clientId, new MemoryPersistence());
+            client = new MqttAsyncClient(broker, clientId, new MemoryPersistence());
             client.setCallback(this);
-            client.connect();
+            IMqttToken token = client.connect();
+            token.waitForCompletion();
         } catch (MqttException e) {
             e.printStackTrace();
         }
@@ -61,6 +68,7 @@ public class Analyser implements MqttCallback, Runnable {
 
     public void disconnected(MqttDisconnectResponse disconnectResponse) {
         //System.out.println("disconnected: " + disconnectResponse.getReasonString());
+        
     }
 
     public void deliveryComplete(IMqttToken token) {
@@ -119,6 +127,16 @@ public class Analyser implements MqttCallback, Runnable {
 
 
 
+        } else if (topic.startsWith("$SYS/")) {
+            handleSysMessage(topic, payload, currentTimeMillis);
+        }
+    }
+
+    private void handleSysMessage(String topic, String payload, long timestamp) {
+        synchronized (sysMetrics) {
+            String key = String.format("%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, topic);
+            ArrayList<String[]> metricsList = sysMetrics.computeIfAbsent(key, k -> new ArrayList<>());
+            metricsList.add(new String[]{String.valueOf(timestamp), payload});
         }
     }
     
@@ -159,14 +177,23 @@ public void run() {
             for (int instanceCount : instanceCountLevels) {
                 for (int qos : qosLevels) {
                     for (int delay : delayLevels) {
+                        if (!analyser.client.isConnected()) {
+                            try {
+                                IMqttToken token = analyser.client.connect();
+                                token.waitForCompletion();
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
+                        }
                         analyser.sendRequest(String.valueOf(qos), String.valueOf(delay), String.valueOf(instanceCount), subQoS);
                         try {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
-
-                            Thread.sleep(10000);
+                            analyser.client.subscribe("$SYS/#", 1);
+                            Thread.sleep(59000);
                             analyser.measurePerformance(qos, delay, instanceCount, subQoS);
                             analyser.client.unsubscribe(topic);
+                            analyser.client.unsubscribe("$SYS/#");
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -178,8 +205,12 @@ public void run() {
     
 
     private void measurePerformance(int qos, int delay, int instanceCount, int subQoS) {
+
+        currentQoS = qos;
+        currentDelay = delay;
+        currentInstanceCount = instanceCount;
         // Average rate of messages received per second.
-        double rate = (double) messageCount / 10;
+        double rate = (double) messageCount / 59;
         totalRateStatsArrayList.add(new String[] {
             String.valueOf(instanceCount),
             String.valueOf(qos),
@@ -193,13 +224,13 @@ public void run() {
         int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
         int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
         //System.out.println("Total Published Messages: " + totalPublishedMessages);
-        System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
+        //System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
     
         
         // Check if totalPublishedMessages is zero to avoid division by zero
         
             double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
-            System.out.println("Message loss rate: " + messageLossRate);
+            //System.out.println("Message loss rate: " + messageLossRate);
             //System.out.println("Message loss rate: " + messageLossRate);
             //System.out.println("Message loss rate: " + messageLossRate);
             messageLossStatsArrayList.add(new String[] {
@@ -332,6 +363,22 @@ public void run() {
             csvWriter.flush();
         } catch (Exception e) {
             System.out.println("Something went wrong writing the CSV file.");
+            e.printStackTrace();
+        }
+
+         // Write the $SYS/# metrics to a CSV file.
+         try (FileWriter csvWriter = new FileWriter("sysMetrics.csv")) {
+            for (Map.Entry<String, ArrayList<String[]>> entry : sysMetrics.entrySet()) {
+                String syskey = entry.getKey();
+                for (String[] rowData : entry.getValue()) {
+                    csvWriter.append(syskey).append(",");
+                    csvWriter.append(String.join(",", rowData));
+                    csvWriter.append("\n");
+                }
+            }
+            csvWriter.flush();
+        } catch (Exception e) {
+            System.out.println("Something went wrong writing the sysMetrics CSV file.");
             e.printStackTrace();
         }
     }
