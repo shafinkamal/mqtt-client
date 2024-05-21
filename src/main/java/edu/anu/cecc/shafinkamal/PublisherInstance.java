@@ -41,11 +41,11 @@ public class PublisherInstance implements Runnable {
 
             client.setCallback(new MqttCallback() {
                 public void connectComplete(boolean reconnect, String serverURI) {
-                    System.out.println(clientId + " connected to: " + serverURI);
+                    //System.out.println(clientId + " connected to: " + serverURI);
                 }
 
                 public void disconnected(MqttDisconnectResponse disconnectResponse) {
-                    System.out.println(clientId + " disconnected: " + disconnectResponse.getReasonString());
+                    //System.out.println(clientId + " disconnected: " + disconnectResponse.getReasonString());
                 }
 
                 public void deliveryComplete(IMqttToken token) {
@@ -64,11 +64,11 @@ public class PublisherInstance implements Runnable {
                 }
 
                 public void mqttErrorOccurred(MqttException exception) {
-                    System.out.println(clientId + " mqttErrorOccurred: " + exception.getMessage());
+                    //System.out.println(clientId + " mqttErrorOccurred: " + exception.getMessage());
                 }
 
                 public void authPacketArrived(int reasonCode, MqttProperties properties) {
-                    System.out.println(clientId + " authPacketArrived");
+                    //System.out.println(clientId + " authPacketArrived");
                 }
             });
 

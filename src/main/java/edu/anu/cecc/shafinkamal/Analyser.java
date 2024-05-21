@@ -76,7 +76,7 @@ public class Analyser implements MqttCallback, Runnable {
     }
 
     public void mqttErrorOccurred(MqttException exception) {
-        System.out.println("mqttErrorOccurred: " + exception.getMessage());
+        //System.out.println("mqttErrorOccurred: " + exception.getMessage());
     }
 
     public void authPacketArrived(int reasonCode, MqttProperties properties) {
@@ -209,6 +209,10 @@ public void run() {
         currentQoS = qos;
         currentDelay = delay;
         currentInstanceCount = instanceCount;
+
+        currentQoS = qos;
+        currentDelay = delay;
+        currentInstanceCount = instanceCount;
         // Average rate of messages received per second.
         double rate = (double) messageCount / 59;
         totalRateStatsArrayList.add(new String[] {
@@ -279,6 +283,8 @@ public void run() {
                     String.valueOf(averageMedianGap)
                 });
             }
+
+            
         
 
         //System.out.println(messageCount + " messages received by the analyser before resetting data."); 
@@ -326,7 +332,7 @@ public void run() {
             }
             csvWriter.flush();
         } catch (Exception e) {
-            System.out.println("Something went wrong writing the CSV file.");
+            //System.out.println("Something went wrong writing the CSV file.");
             e.printStackTrace();
         }
 
