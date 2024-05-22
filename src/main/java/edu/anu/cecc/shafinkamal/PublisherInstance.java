@@ -83,7 +83,7 @@ public class PublisherInstance implements Runnable {
                     newConfigurationReceived = false;
                     publishMessages();
                 } else {
-                    Thread.sleep(59000);
+                    Thread.sleep(10000);
                 }
             }
 
@@ -95,7 +95,7 @@ public class PublisherInstance implements Runnable {
     private void publishMessages() throws MqttException, InterruptedException {
         int counter = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime < 59000) {
+        while (System.currentTimeMillis() - startTime < 10000) {
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
@@ -103,8 +103,10 @@ public class PublisherInstance implements Runnable {
             counter++;
             Thread.sleep(requestedDelay);
         }
-        String key = String.format("%d_%d_%d", requestedInstanceCount, requestedQoS, requestedDelay);
+        String key = String.format("counter/%d/%d/%d", requestedInstanceCount, requestedQoS, requestedDelay);
+        //System.out.println("[PUBLISHER] pub-" + instanceId + " published " + counter + " messages to topic: " + key);
         MessageCountManager.getInstance().incrementPublishedCount(key, counter);
+        //System.out.println("[PUBLISHER] Total number of published messages for topic " + key + ": " + MessageCountManager.getInstance().getPublishedCount(key));
         //System.out.println("publisher's key: " + key + " counter: " + counter);
         //System.out.println(instanceId + "published " + counter + " messages.");
     }

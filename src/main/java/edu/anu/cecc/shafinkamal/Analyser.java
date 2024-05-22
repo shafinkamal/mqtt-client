@@ -104,6 +104,7 @@ public class Analyser implements MqttCallback, Runnable {
             String[] topicParts = topic.split("/");
             String publisherID = topicParts[1] + "_" + topicParts[2] + "_" + topicParts[3];
 
+            // Calculate the gap between the last message and the current message from the same publisher.
             synchronized (gaps) {
                 if (lastTimestamps.containsKey(publisherID)) {
                     long gap = currentTimeMillis - lastTimestamps.get(publisherID);
@@ -117,7 +118,6 @@ public class Analyser implements MqttCallback, Runnable {
             if (lastCounterValues.containsKey(publisherID)) {
                 if (counterValue < lastCounterValues.get(publisherID)) {
                     outOfOrderCount++;
-
                 }
             }
             lastCounterValues.put(publisherID, counterValue);
@@ -137,6 +137,21 @@ public class Analyser implements MqttCallback, Runnable {
             String key = String.format("%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, topic);
             ArrayList<String[]> metricsList = sysMetrics.computeIfAbsent(key, k -> new ArrayList<>());
             metricsList.add(new String[]{String.valueOf(timestamp), payload});
+        }
+    }
+
+    private void collectSysMetrics() {
+        try {
+            // Subscribe to $SYS/# topic to collect the metrics
+            client.subscribe("$SYS/#", 1);
+
+            // Wait for a short period to collect the metrics
+            Thread.sleep(1500); // Adjust the sleep time as needed
+
+            // Unsubscribe from the $SYS/# topic after collecting the metrics
+            client.unsubscribe("$SYS/#");
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
     
@@ -163,7 +178,9 @@ public void run() {
         int[] instanceCountLevels = {1, 2, 3, 4, 5};
     
         runTests(analyser, qosLevels, delayLevels, instanceCountLevels);
+        System.out.println("Tests run successfully.");
         analyser.writeCSVFiles();
+        System.out.println("CSV files written successfully.");
     } catch (Exception e) {
         e.printStackTrace();
     }
@@ -174,6 +191,10 @@ public void run() {
     private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels) {
         int[] subscriptionQoSLevels = {0, 1, 2};
         for (int subQoS : subscriptionQoSLevels) {
+            MessageCountManager.getInstance().resetCounts();
+            analyser.lastTimestamps.clear();
+            analyser.gaps.clear();
+            System.out.println("Subscribing at QoS " + subQoS);
             for (int instanceCount : instanceCountLevels) {
                 for (int qos : qosLevels) {
                     for (int delay : delayLevels) {
@@ -189,11 +210,12 @@ public void run() {
                         try {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
-                            analyser.client.subscribe("$SYS/#", 1);
-                            Thread.sleep(59000);
+                            Thread.sleep(10000);
+                            //System.out.println("[ANALYSER] For " + String.format("counter/%d/%d/%d", instanceCount, qos, delay) + ": message count = " + MessageCountManager.getInstance().getReceivedCount(String.format("counter/%d/%d/%d", instanceCount, qos, delay)));
+                            //System.out.println("[ANALYSER] Message count for topic " + String.format("counter/%d/%d/%d ", instanceCount, qos, delay) + analyser.messageCount);
                             analyser.measurePerformance(qos, delay, instanceCount, subQoS);
+                            analyser.collectSysMetrics();
                             analyser.client.unsubscribe(topic);
-                            analyser.client.unsubscribe("$SYS/#");
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -214,7 +236,7 @@ public void run() {
         currentDelay = delay;
         currentInstanceCount = instanceCount;
         // Average rate of messages received per second.
-        double rate = (double) messageCount / 59;
+        double rate = (double) messageCount / 10;
         totalRateStatsArrayList.add(new String[] {
             String.valueOf(instanceCount),
             String.valueOf(qos),
