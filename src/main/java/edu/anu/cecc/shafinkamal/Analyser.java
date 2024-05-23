@@ -45,6 +45,9 @@ public class Analyser implements MqttCallback, Runnable {
     private int currentQoS;
     private int currentDelay;
     private int currentInstanceCount;
+    private int sysMetricSubQos;
+    private ArrayList<String[]> aggregatedMetrics = new ArrayList<>();
+
 
 
 
@@ -129,27 +132,40 @@ public class Analyser implements MqttCallback, Runnable {
 
         } else if (topic.startsWith("$SYS/")) {
             handleSysMessage(topic, payload, currentTimeMillis);
+            //System.out.println(String.format("Received sys metric: %s %s", topic, payload));
         }
     }
 
     private void handleSysMessage(String topic, String payload, long timestamp) {
         synchronized (sysMetrics) {
             String key = String.format("%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, topic);
+            //System.out.println("[HANDLING] sysMetrics key: " + key);
             ArrayList<String[]> metricsList = sysMetrics.computeIfAbsent(key, k -> new ArrayList<>());
             metricsList.add(new String[]{String.valueOf(timestamp), payload});
+            //System.out.println(String.format("handled sys metric: %s %s", topic, payload));
         }
     }
 
     private void collectSysMetrics() {
         try {
             // Subscribe to $SYS/# topic to collect the metrics
-            client.subscribe("$SYS/#", 1);
+            client.subscribe(new String[]{
+                "$SYS/broker/load/messages/received/1min",
+                "$SYS/broker/load/messages/sent/1min",
+                "$SYS/broker/clients/connected",
+                "$SYS/broker/load/publish/dropped/1min"
+            }, new int[]{1, 1, 1, 1});
 
             // Wait for a short period to collect the metrics
-            Thread.sleep(1500); // Adjust the sleep time as needed
+            Thread.sleep(5000); // Adjust the sleep time as needed
 
             // Unsubscribe from the $SYS/# topic after collecting the metrics
-            client.unsubscribe("$SYS/#");
+            client.unsubscribe(new String[]{
+                "$SYS/broker/load/messages/received/1min",
+                "$SYS/broker/load/messages/sent/1min",
+                "$SYS/broker/clients/connected",
+                "$SYS/broker/load/publish/dropped/1min"
+            });
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -210,10 +226,11 @@ public void run() {
                         try {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
-                            Thread.sleep(10000);
+                            Thread.sleep(5000);
                             //System.out.println("[ANALYSER] For " + String.format("counter/%d/%d/%d", instanceCount, qos, delay) + ": message count = " + MessageCountManager.getInstance().getReceivedCount(String.format("counter/%d/%d/%d", instanceCount, qos, delay)));
                             //System.out.println("[ANALYSER] Message count for topic " + String.format("counter/%d/%d/%d ", instanceCount, qos, delay) + analyser.messageCount);
                             analyser.measurePerformance(qos, delay, instanceCount, subQoS);
+                            analyser.sysMetricSubQos = subQoS;
                             analyser.collectSysMetrics();
                             analyser.client.unsubscribe(topic);
                         } catch (Exception e) {
@@ -232,90 +249,75 @@ public void run() {
         currentDelay = delay;
         currentInstanceCount = instanceCount;
 
-        currentQoS = qos;
-        currentDelay = delay;
-        currentInstanceCount = instanceCount;
         // Average rate of messages received per second.
-        double rate = (double) messageCount / 10;
-        totalRateStatsArrayList.add(new String[] {
+        double rate = (double) messageCount / 5;
+        String key = String.format("%d_%d_%d", instanceCount, qos, delay);
+        int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
+        int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
+
+        // Check if totalPublishedMessages is zero to avoid division by zero
+        double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
+        double outOfOrderRate = (double) outOfOrderCount / messageCount * 100;
+
+        // Make a copy of the gaps map to avoid ConcurrentModificationException
+        Map<String, ArrayList<Long>> gapsCopy;
+        synchronized (gaps) {
+            gapsCopy = new HashMap<>(gaps);
+        }
+
+        long totalMedianGap = 0;
+        int publisherCount = 0;
+
+        for (Map.Entry<String, ArrayList<Long>> entry : gapsCopy.entrySet()) {
+            ArrayList<Long> gapList = new ArrayList<>(entry.getValue());
+            Collections.sort(gapList);
+            long medianGap = gapList.get(gapList.size() / 2);
+            totalMedianGap += medianGap;
+            publisherCount++;
+        }
+
+        long averageMedianGap = publisherCount > 0 ? totalMedianGap / publisherCount : 0;
+
+        // Collect the system metrics
+        String[] sysMetricsValues = new String[4];
+        String[] sysMetricTopics = {
+            "$SYS/broker/load/messages/received/1min",
+            "$SYS/broker/load/messages/sent/1min",
+            "$SYS/broker/clients/connected",
+            "$SYS/broker/load/publish/dropped/1min"
+        };
+        for (int i = 0; i < sysMetricTopics.length; i++) {
+            String sysMetricKey = String.format("%d_%d_%d_%s", instanceCount, qos, delay, sysMetricTopics[i]);
+            //System.out.println("[MEASURE] sysMetrics key: " + sysMetricKey);
+            ArrayList<String[]> metricsList = sysMetrics.get(sysMetricKey);
+            //System.out.println("sysMetrics: " + metricsList);
+            if (metricsList != null && !metricsList.isEmpty()) {
+                sysMetricsValues[i] = metricsList.get(metricsList.size() - 1)[1]; // Get the latest value
+            } else {
+                sysMetricsValues[i] = "0";
+            }
+        }
+
+        // Add the aggregated data to the list
+        aggregatedMetrics.add(new String[]{
             String.valueOf(instanceCount),
             String.valueOf(qos),
             String.valueOf(delay),
             String.valueOf(subQoS),
-            String.valueOf(rate)
+            String.valueOf(rate),
+            String.valueOf(messageLossRate),
+            String.valueOf(outOfOrderRate),
+            String.valueOf(averageMedianGap),
+            sysMetricsValues[0],
+            sysMetricsValues[1],
+            sysMetricsValues[2],
+            sysMetricsValues[3]
         });
-    
-        
-        String key = String.format("%d_%d_%d", instanceCount, qos, delay);
-        int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
-        int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
-        //System.out.println("Total Published Messages: " + totalPublishedMessages);
-        //System.out.println("analyser's key: " + key + " totalReceivedMessages: " + totalReceivedMessages);
-    
-        
-        // Check if totalPublishedMessages is zero to avoid division by zero
-        
-            double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
-            //System.out.println("Message loss rate: " + messageLossRate);
-            //System.out.println("Message loss rate: " + messageLossRate);
-            //System.out.println("Message loss rate: " + messageLossRate);
-            messageLossStatsArrayList.add(new String[] {
-                String.valueOf(instanceCount),
-                String.valueOf(qos),
-                String.valueOf(delay),
-                String.valueOf(subQoS),
-                String.valueOf(messageLossRate)
-            });
 
-            double outOfOrderRate = (double) outOfOrderCount / messageCount * 100;
-            outOfOrderStatsArrayList.add(new String[] {
-                String.valueOf(instanceCount),
-                String.valueOf(qos),
-                String.valueOf(delay),
-                String.valueOf(subQoS),
-                String.valueOf(outOfOrderRate)
-            });
-
-            // Make a copy of the gaps map to avoid ConcurrentModificationException
-            Map<String, ArrayList<Long>> gapsCopy;
-            synchronized (gaps) {
-                gapsCopy = new HashMap<>(gaps);
-            }
-
-            long totalMedianGap = 0;
-            int publisherCount = 0;
-
-            for (Map.Entry<String, ArrayList<Long>> entry : gapsCopy.entrySet()) {
-                ArrayList<Long> gapList = new ArrayList<>(entry.getValue());
-                Collections.sort(gapList);
-                long medianGap = gapList.get(gapList.size() / 2);
-                totalMedianGap += medianGap;
-                publisherCount++;
-                //System.out.println("Publisher: " + entry.getKey() + ", Median Gap: " + medianGap);
-            }
-
-            if (publisherCount > 0) {
-                long averageMedianGap = totalMedianGap / publisherCount;
-                //System.out.println("Average Median Gap: " + averageMedianGap);
-                medianMessageGapsArrayList.add(new String[] {
-                    String.valueOf(instanceCount),
-                    String.valueOf(qos),
-                    String.valueOf(delay),
-                    String.valueOf(subQoS),
-                    String.valueOf(averageMedianGap)
-                });
-            }
-
-            
-        
-
-        //System.out.println(messageCount + " messages received by the analyser before resetting data."); 
-    
-        // Reset the data for the next configuration.
+        // Reset the data for the next configuration
         resetData();
-
-        //System.out.println(messageCount + "messages received by the analyser after resetting data.");
     }
+
 
     
     
@@ -346,67 +348,19 @@ public void run() {
     }
 
     public void writeCSVFiles() {
-        // Write the average message data to a CSV file.
-        try (FileWriter csvWriter = new FileWriter("rateStats.csv")){
-            for (String[] rowData : totalRateStatsArrayList) {
-                csvWriter.append(String.join(",", rowData));
-                csvWriter.append("\n");
-            }
-            csvWriter.flush();
-        } catch (Exception e) {
-            //System.out.println("Something went wrong writing the CSV file.");
-            e.printStackTrace();
-        }
+        // Write all metrics to a single CSV file
+        try (FileWriter csvWriter = new FileWriter("allMetrics.csv")) {
+            // Write the header
+            csvWriter.append("InstanceCount, QoS, Delay, Subscription QoS, Rate of messages, Message Loss, Out of order messages, median inter message gaps, $SYS/broker/load/messages/received/1min, $SYS/broker/load/messages/sent/1min, $SYS/broker/clients/connected, $SYS/broker/load/publish/dropped/1min\n");
 
-        // Write the message loss to a CSV file.
-        try (FileWriter csvWriter = new FileWriter("messageLossStats.csv")){
-            for (String[] rowData : messageLossStatsArrayList) {
+            // Write the data
+            for (String[] rowData : aggregatedMetrics) {
                 csvWriter.append(String.join(",", rowData));
                 csvWriter.append("\n");
             }
             csvWriter.flush();
         } catch (Exception e) {
             System.out.println("Something went wrong writing the CSV file.");
-            e.printStackTrace();
-        }
-
-        // Write the out of order stats to a CSV file.
-        try (FileWriter csvWriter = new FileWriter("outOfOrderStats.csv")){
-            for (String[] rowData : outOfOrderStatsArrayList) {
-                csvWriter.append(String.join(",", rowData));
-                csvWriter.append("\n");
-            }
-            csvWriter.flush();
-        } catch (Exception e) {
-            System.out.println("Something went wrong writing the CSV file.");
-            e.printStackTrace();
-        }
-
-        // Write the median message gaps to a CSV file.
-        try (FileWriter csvWriter = new FileWriter("medianMessageGaps.csv")) {
-            for (String[] rowData : medianMessageGapsArrayList) {
-                csvWriter.append(String.join(",", rowData));
-                csvWriter.append("\n");
-            }
-            csvWriter.flush();
-        } catch (Exception e) {
-            System.out.println("Something went wrong writing the CSV file.");
-            e.printStackTrace();
-        }
-
-         // Write the $SYS/# metrics to a CSV file.
-         try (FileWriter csvWriter = new FileWriter("sysMetrics.csv")) {
-            for (Map.Entry<String, ArrayList<String[]>> entry : sysMetrics.entrySet()) {
-                String syskey = entry.getKey();
-                for (String[] rowData : entry.getValue()) {
-                    csvWriter.append(syskey).append(",");
-                    csvWriter.append(String.join(",", rowData));
-                    csvWriter.append("\n");
-                }
-            }
-            csvWriter.flush();
-        } catch (Exception e) {
-            System.out.println("Something went wrong writing the sysMetrics CSV file.");
             e.printStackTrace();
         }
     }

@@ -83,7 +83,7 @@ public class PublisherInstance implements Runnable {
                     newConfigurationReceived = false;
                     publishMessages();
                 } else {
-                    Thread.sleep(10000);
+                    Thread.sleep(5000);
                 }
             }
 
@@ -95,7 +95,7 @@ public class PublisherInstance implements Runnable {
     private void publishMessages() throws MqttException, InterruptedException {
         int counter = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime < 10000) {
+        while (System.currentTimeMillis() - startTime < 5000) {
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
