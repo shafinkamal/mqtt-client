@@ -24,7 +24,7 @@ public class PublisherInstance implements Runnable {
     static int requestedDelay;
     static int requestedInstanceCount;
     private boolean newConfigurationReceived = false;
-
+    int xxx = 0;
     public PublisherInstance(String broker, String clientId, int subQos, int pubQos, int instanceId) {
         this.broker = broker;
         this.clientId = clientId;
@@ -59,6 +59,8 @@ public class PublisherInstance implements Runnable {
                         requestedDelay = Integer.parseInt(new String(message.getPayload()));
                     } else if (topic.equals("request/instancecount")) {
                         requestedInstanceCount = Integer.parseInt(new String(message.getPayload()));
+                    } else if (topic.equals("subQoS/level")) {
+                        xxx = Integer.parseInt(new String(message.getPayload()));
                     }
                     newConfigurationReceived = true;
                 }
@@ -83,7 +85,7 @@ public class PublisherInstance implements Runnable {
                     newConfigurationReceived = false;
                     publishMessages();
                 } else {
-                    Thread.sleep(5000);
+                    Thread.sleep(59000);
                 }
             }
 
@@ -95,7 +97,7 @@ public class PublisherInstance implements Runnable {
     private void publishMessages() throws MqttException, InterruptedException {
         int counter = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime < 5000) {
+        while (System.currentTimeMillis() - startTime < 59000) {
             String topic = String.format("counter/%d/%d/%d", instanceId, requestedQoS, requestedDelay);
             MqttMessage message = new MqttMessage(String.valueOf(counter).getBytes());
             message.setQos(requestedQoS);
@@ -103,9 +105,18 @@ public class PublisherInstance implements Runnable {
             counter++;
             Thread.sleep(requestedDelay);
         }
-        String key = String.format("counter/%d/%d/%d", requestedInstanceCount, requestedQoS, requestedDelay);
-        //System.out.println("[PUBLISHER] pub-" + instanceId + " published " + counter + " messages to topic: " + key);
+        //System.out.println("[PUBLISHER] pub-" + instanceId+ "counter+: " + counter);
+        client.subscribe("subQoS/level", 1);
+        String key = String.format("%d/%d/%d/%d", requestedInstanceCount, requestedQoS, requestedDelay, xxx);
+        
         MessageCountManager.getInstance().incrementPublishedCount(key, counter);
+
+        //System.out.println("Key " + key + "published amount: " + MessageCountManager.getInstance().getPublishedCount(key));
+        //System.out.println(key+" published: "+MessageCountManager.getInstance().getPublishedCount(key));
+        
+        //System.out.println("[PUBLISHER] pub-" + instanceId + " published " + counter + " messages to topic: " + key);
+        //MessageCountManager.getInstance().incrementPublishedCount(key, counter);
+        //System.out.println("[PUBLISHER] Total number of published messages for topic " + key + ": " + MessageCountManager.getInstance().getPublishedCount(key));
         //System.out.println("[PUBLISHER] Total number of published messages for topic " + key + ": " + MessageCountManager.getInstance().getPublishedCount(key));
         //System.out.println("publisher's key: " + key + " counter: " + counter);
         //System.out.println(instanceId + "published " + counter + " messages.");

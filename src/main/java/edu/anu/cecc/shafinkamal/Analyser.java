@@ -20,6 +20,7 @@ import java.util.concurrent.CountDownLatch; // Add this line to import the Count
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Collections;
+import java.util.Arrays;
 
 public class Analyser implements MqttCallback, Runnable {
 
@@ -102,7 +103,7 @@ public class Analyser implements MqttCallback, Runnable {
 
             // updated how many messages is being seen in this topic.
             messageCount++;
-            MessageCountManager.getInstance().incrementReceivedCount(topic);            
+            MessageCountManager.getInstance().incrementReceivedCount(String.format("%d/%d/%d/%d", currentInstanceCount, currentQoS, currentDelay, sysMetricSubQos));            
 
             String[] topicParts = topic.split("/");
             String publisherID = topicParts[1] + "_" + topicParts[2] + "_" + topicParts[3];
@@ -138,11 +139,11 @@ public class Analyser implements MqttCallback, Runnable {
 
     private void handleSysMessage(String topic, String payload, long timestamp) {
         synchronized (sysMetrics) {
-            String key = String.format("%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, topic);
+            String key = String.format("%d_%d_%d_%d_%s", currentInstanceCount, currentQoS, currentDelay, sysMetricSubQos, topic);
             //System.out.println("[HANDLING] sysMetrics key: " + key);
             ArrayList<String[]> metricsList = sysMetrics.computeIfAbsent(key, k -> new ArrayList<>());
             metricsList.add(new String[]{String.valueOf(timestamp), payload});
-            //System.out.println(String.format("handled sys metric: %s %s", topic, payload));
+            //System.out.println(String.format("handled sys metric for key :%s %s %s ",key, topic, payload));
         }
     }
 
@@ -197,6 +198,8 @@ public void run() {
         System.out.println("Tests run successfully.");
         analyser.writeCSVFiles();
         System.out.println("CSV files written successfully.");
+        analyser.computeMessageLossRateAndWriteCSV();
+
     } catch (Exception e) {
         e.printStackTrace();
     }
@@ -207,10 +210,18 @@ public void run() {
     private static void runTests(Analyser analyser, int[] qosLevels, int[] delayLevels, int[] instanceCountLevels) {
         int[] subscriptionQoSLevels = {0, 1, 2};
         for (int subQoS : subscriptionQoSLevels) {
+            
             MessageCountManager.getInstance().resetCounts();
             analyser.lastTimestamps.clear();
             analyser.gaps.clear();
             System.out.println("Subscribing at QoS " + subQoS);
+            try {
+                MqttMessage subQoSmsg = new MqttMessage(String.valueOf(subQoS).getBytes());
+                subQoSmsg.setRetained(true);
+                analyser.client.publish("subQoS/level", subQoSmsg);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             for (int instanceCount : instanceCountLevels) {
                 for (int qos : qosLevels) {
                     for (int delay : delayLevels) {
@@ -226,12 +237,15 @@ public void run() {
                         try {
                             String topic = String.format("counter/#", instanceCount, qos, delay);
                             analyser.client.subscribe(topic, subQoS);
-                            Thread.sleep(5000);
+                            Thread.sleep(59000);
                             //System.out.println("[ANALYSER] For " + String.format("counter/%d/%d/%d", instanceCount, qos, delay) + ": message count = " + MessageCountManager.getInstance().getReceivedCount(String.format("counter/%d/%d/%d", instanceCount, qos, delay)));
                             //System.out.println("[ANALYSER] Message count for topic " + String.format("counter/%d/%d/%d ", instanceCount, qos, delay) + analyser.messageCount);
-                            analyser.measurePerformance(qos, delay, instanceCount, subQoS);
                             analyser.sysMetricSubQos = subQoS;
+                            analyser.currentDelay = delay;
+                            analyser.currentQoS = qos;
+                            analyser.currentInstanceCount = instanceCount;
                             analyser.collectSysMetrics();
+                            analyser.measurePerformance(qos, delay, instanceCount, subQoS);
                             analyser.client.unsubscribe(topic);
                         } catch (Exception e) {
                             e.printStackTrace();
@@ -250,13 +264,22 @@ public void run() {
         currentInstanceCount = instanceCount;
 
         // Average rate of messages received per second.
-        double rate = (double) messageCount / 5;
-        String key = String.format("%d_%d_%d", instanceCount, qos, delay);
+        double rate = (double) messageCount / 59;
+        String key = String.format("%d/%d/%d/%d", instanceCount, qos, delay, subQoS);
+        
         int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
+        //System.out.println("[MEASURE] Total published messages for key " + key + ": " + totalPublishedMessages);
+        //System.out.println("[MEASURE] Total published messages for key " + key + ": " + totalPublishedMessages);
         int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
+        System.out.println("[ANALYSER] Key: " + key + " Total received messages: " + totalReceivedMessages);
+
+        //System.out.println("[MEASURE] Total received messages for key " + key + ": " + totalReceivedMessages);
 
         // Check if totalPublishedMessages is zero to avoid division by zero
         double messageLossRate = (1 - (double) messageCount / totalPublishedMessages) * 100;
+        //System.out.println("[MEASURE] Message count: " + messageCount);
+        //System.out.println("[MEASURE] Message loss rate: " + messageLossRate);
+
         double outOfOrderRate = (double) outOfOrderCount / messageCount * 100;
 
         // Make a copy of the gaps map to avoid ConcurrentModificationException
@@ -287,7 +310,7 @@ public void run() {
             "$SYS/broker/load/publish/dropped/1min"
         };
         for (int i = 0; i < sysMetricTopics.length; i++) {
-            String sysMetricKey = String.format("%d_%d_%d_%s", instanceCount, qos, delay, sysMetricTopics[i]);
+            String sysMetricKey = String.format("%d_%d_%d_%d_%s", instanceCount, qos, delay, subQoS, sysMetricTopics[i]);
             //System.out.println("[MEASURE] sysMetrics key: " + sysMetricKey);
             ArrayList<String[]> metricsList = sysMetrics.get(sysMetricKey);
             //System.out.println("sysMetrics: " + metricsList);
@@ -295,24 +318,31 @@ public void run() {
                 sysMetricsValues[i] = metricsList.get(metricsList.size() - 1)[1]; // Get the latest value
             } else {
                 sysMetricsValues[i] = "0";
+                //System.out.println("No sys metrics found for key: " + sysMetricKey + " when adding to aggregatedMetrics.");
             }
         }
+        
+
+        // Prepare the data to be added
+        String[] data = new String[] {
+                String.valueOf(instanceCount),
+                String.valueOf(qos),
+                String.valueOf(delay),
+                String.valueOf(subQoS),
+                String.valueOf(rate),
+                String.valueOf(messageLossRate),
+                String.valueOf(outOfOrderRate),
+                String.valueOf(averageMedianGap),
+                sysMetricsValues[0],
+                sysMetricsValues[1],
+                sysMetricsValues[2],
+                sysMetricsValues[3]
+        };
+
+        //System.out.println(Arrays.toString(data));
 
         // Add the aggregated data to the list
-        aggregatedMetrics.add(new String[]{
-            String.valueOf(instanceCount),
-            String.valueOf(qos),
-            String.valueOf(delay),
-            String.valueOf(subQoS),
-            String.valueOf(rate),
-            String.valueOf(messageLossRate),
-            String.valueOf(outOfOrderRate),
-            String.valueOf(averageMedianGap),
-            sysMetricsValues[0],
-            sysMetricsValues[1],
-            sysMetricsValues[2],
-            sysMetricsValues[3]
-        });
+        aggregatedMetrics.add(data);
 
         // Reset the data for the next configuration
         resetData();
@@ -364,4 +394,42 @@ public void run() {
             e.printStackTrace();
         }
     }
+
+    public void computeMessageLossRateAndWriteCSV() {
+        try (FileWriter csvWriter = new FileWriter("messageLossRates.csv")) {
+            // Write the header
+            csvWriter.append("InstanceCount, QoS, Delay, Subscription QoS, Total Published Messages, Total Received Messages, Message Loss Rate\n");
+    
+            int[] instanceCountLevels = {1, 2, 3, 4, 5};
+            int[] qosLevels = {0, 1, 2};
+            int[] delayLevels = {0, 1, 2, 4};
+            int[] subscriptionQoSLevels = {0, 1, 2};
+    
+            for (int instanceCount : instanceCountLevels) {
+                for (int qos : qosLevels) {
+                    for (int delay : delayLevels) {
+                        for (int subQoS : subscriptionQoSLevels) {
+                            String key = String.format("%d/%d/%d/%d", instanceCount, qos, delay, subQoS);
+                            int totalPublishedMessages = MessageCountManager.getInstance().getPublishedCount(key);
+                            int totalReceivedMessages = MessageCountManager.getInstance().getReceivedCount(key);
+                            
+                            double messageLossRate = 0.0;
+                            if (totalPublishedMessages > 0) {
+                                messageLossRate = (1 - (double)totalReceivedMessages / totalPublishedMessages) * 100;
+                            }
+    
+                            csvWriter.append(String.format("%d, %d, %d, %d, %d, %d, %.2f\n",
+                                    instanceCount, qos, delay, subQoS, totalPublishedMessages, totalReceivedMessages, messageLossRate));
+                        }
+                    }
+                }
+            }
+            csvWriter.flush();
+        } catch (Exception e) {
+            System.out.println("Something went wrong writing the CSV file.");
+            e.printStackTrace();
+        }
+    }
+
+    
 }
